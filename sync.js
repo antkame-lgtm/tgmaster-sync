@@ -122,7 +122,7 @@ async function run() {
                       sc.match(/events\s*:\s*(\[[\s\S]*?\])\s*\}\s*\)/m);
       if (evMatch) {
         try {
-          newEvents = eval(evMatch[1]);
+          newEvents = JSON.parse(evMatch[1]);
           break;
         } catch (e) {}
       }
