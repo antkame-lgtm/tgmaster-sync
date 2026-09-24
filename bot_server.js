@@ -221,10 +221,26 @@ const pollUpdates = async () => {
         const chatId = msg.chat.id;
         const text = msg.text.trim().toLowerCase();
 
-        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE
+        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE (CHAT ID)
         if (allowedChatId && String(chatId) !== String(allowedChatId)) {
-          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${msg.from?.first_name || 'Inconnu'}`);
-          await sendMessage(chatId, `⛔ *Accès strictement refusé.*\n\nCe bot est un assistant privé sécurisé. Votre compte Telegram n'est pas autorisé à consulter ces données académiques.`);
+          const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
+          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${intruder}, Texte: "${msg.text}"`);
+          
+          // Répondre à l'intrus en supprimant tout clavier interactif
+          await telegramRequest('sendMessage', {
+            chat_id: chatId,
+            text: `⛔ *Accès strictement refusé.*\n\nCe bot est un assistant personnel privé verrouillé. Vous n'avez pas l'autorisation d'accéder à ce système.`,
+            parse_mode: 'Markdown',
+            reply_markup: { remove_keyboard: true }
+          });
+
+          // Alerter immédiatement le propriétaire légitime
+          await telegramRequest('sendMessage', {
+            chat_id: allowedChatId,
+            text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${intruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${msg.text}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
+            parse_mode: 'Markdown'
+          });
+
           continue;
         }
 
