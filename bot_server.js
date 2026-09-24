@@ -20,6 +20,7 @@ const botToken = process.env.TELEGRAM_BOT_TOKEN || config.TELEGRAM_BOT_TOKEN;
 const email = process.env.TGMASTER_EMAIL || config.TGMASTER_EMAIL;
 const password = process.env.TGMASTER_PASSWORD || config.TGMASTER_PASSWORD;
 const allowedChatId = process.env.TELEGRAM_CHAT_ID || config.TELEGRAM_CHAT_ID;
+const allowedUserId = process.env.TELEGRAM_ALLOWED_USER_ID || config.TELEGRAM_ALLOWED_USER_ID || allowedChatId;
 
 if (!botToken || !email || !password || !allowedChatId) {
   console.error('Erreur Critique Sécurité: Identifiants ou TELEGRAM_CHAT_ID manquant. Arrêt d\'urgence (Fail-Closed).');
@@ -44,9 +45,18 @@ const telegramRequest = (method, data = null) => {
       } : {}
     };
 
+    const MAX_TELEGRAM_RESPONSE = 5 * 1024 * 1024; // 5 Mo maximum
     const req = https.request(options, res => {
       let body = '';
-      res.on('data', c => body += c);
+      let totalBytes = 0;
+      res.on('data', c => {
+        totalBytes += c.length;
+        if (totalBytes > MAX_TELEGRAM_RESPONSE) {
+          req.destroy(new Error('Réponse Telegram dépassant la limite autorisée (5 Mo)'));
+          return;
+        }
+        body += c;
+      });
       res.on('end', () => {
         try {
           resolve(JSON.parse(body));
@@ -54,6 +64,9 @@ const telegramRequest = (method, data = null) => {
           resolve({ ok: false, error: e.message });
         }
       });
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('Délai d\'attente Telegram dépassé (15s)'));
     });
     req.on('error', reject);
     if (data) req.write(postData);
@@ -206,6 +219,34 @@ const handleLivePlanning = async () => {
   }
 };
 
+// Cache mémoire borné avec TTL pour prévenir tout déni de service et fuite mémoire
+class BoundedTtlCache {
+  constructor(maxSize = 100, ttlMs = 600000) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.map = new Map();
+  }
+  get(key) {
+    const entry = this.map.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.time > this.ttlMs) {
+      this.map.delete(key);
+      return null;
+    }
+    return entry.val;
+  }
+  set(key, val) {
+    if (this.map.size >= this.maxSize) {
+      const oldestKey = this.map.keys().next().value;
+      this.map.delete(oldestKey);
+    }
+    this.map.set(key, { val, time: Date.now() });
+  }
+}
+
+const intruderCooldowns = new BoundedTtlCache(100, 60000); // 60s cooldown de réponse par intrus
+const intruderAlertCooldowns = new BoundedTtlCache(50, 120000); // 2min cooldown alertes propriétaire
+
 // Long polling
 let lastUpdateId = 0;
 
@@ -219,34 +260,46 @@ const pollUpdates = async () => {
         if (!msg || !msg.text) continue;
 
         const chatId = msg.chat.id;
+        const chatType = msg.chat.type;
         const fromId = msg.from ? msg.from.id : null;
         const text = msg.text.trim().toLowerCase();
 
-        // 🛡️ SÉCURITÉ MAXIMALE : DOUBLE WHITELIST (CHAT ID + FROM USER ID) - FAIL-CLOSED
-        if (!allowedChatId || String(chatId) !== String(allowedChatId) || String(fromId) !== String(allowedChatId)) {
-          const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
-          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${intruder}, Texte: "${msg.text}"`);
-          
-          // Répondre à l'intrus en supprimant tout clavier interactif
-          await telegramRequest('sendMessage', {
-            chat_id: chatId,
-            text: `⛔ *Accès strictement refusé.*\n\nCe bot est un assistant personnel privé verrouillé. Vous n'avez pas l'autorisation d'accéder à ce système.`,
-            parse_mode: 'Markdown',
-            reply_markup: { remove_keyboard: true }
-          });
+        // 🛡️ SÉCURITÉ ABSOLUE : TYPE PRIVÉ EXCLUSIF + DOUBLE WHITELIST SÉPARÉE (CHAT + USER) - FAIL-CLOSED
+        const isAuthorized = chatType === 'private' &&
+                             allowedChatId &&
+                             String(chatId) === String(allowedChatId) &&
+                             allowedUserId &&
+                             String(fromId) === String(allowedUserId);
 
-          // Alerte temps réel anti-bombing (au max 1 alerte toutes les 30s par intrus)
-          const now = Date.now();
-          if (!global.lastAlertTime) global.lastAlertTime = {};
-          if (!global.lastAlertTime[chatId] || (now - global.lastAlertTime[chatId] > 30000)) {
-            global.lastAlertTime[chatId] = now;
-            const safeIntruder = String(intruder).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
-            const safeText = String(msg.text).substring(0, 80).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+        if (!isAuthorized) {
+          const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
+          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Type: ${chatType}, User: ${intruder}`);
+
+          // Anti-DoS : Si cet intrus a déjà été notifié dans les 60s, DROP SILENCIEUX (zéro requête réseau, préserve les quotas Telegram)
+          if (intruderCooldowns.get(chatId)) {
+            continue;
+          }
+          intruderCooldowns.set(chatId, Date.now());
+
+          // Répondre une seule fois à l'intrus en supprimant tout clavier
+          try {
             await telegramRequest('sendMessage', {
-              chat_id: allowedChatId,
-              text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${safeIntruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${safeText}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
-              parse_mode: 'Markdown'
+              chat_id: chatId,
+              text: `⛔ Accès strictement refusé. Cet assistant personnel est verrouillé.`,
+              reply_markup: { remove_keyboard: true }
             });
+          } catch (_) {}
+
+          // Alerte propriétaire en TEXTE BRUT pur (zéro parse_mode => élimination mathématique des failles de formatage)
+          if (!intruderAlertCooldowns.get(chatId)) {
+            intruderAlertCooldowns.set(chatId, Date.now());
+            try {
+              const safeCleanText = String(msg.text).substring(0, 100);
+              await telegramRequest('sendMessage', {
+                chat_id: allowedChatId,
+                text: `[ALERTE SECURITE] Tentative d'accès bloquée !\n\n- Type chat : ${chatType}\n- Utilisateur : ${intruder}\n- ID Telegram : ${chatId}\n- Message : ${safeCleanText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
+              });
+            } catch (_) {}
           }
 
           continue;
@@ -297,12 +350,19 @@ const pollUpdates = async () => {
   setTimeout(pollUpdates, 1000);
 };
 
-// Démarrage sécurisé : suppression explicite de tout webhook pour garantir le Long Polling pur
+// Démarrage sécurisé : suppression explicite de tout webhook avec vérification stricte (Fail-Closed)
 (async () => {
   try {
-    await telegramRequest('deleteWebhook', { drop_pending_updates: false });
-    console.log('🔒 Webhook purgé : Mode Long Polling exclusif actif (zéro endpoint HTTP exposé).');
-  } catch (e) {}
+    const dw = await telegramRequest('deleteWebhook', { drop_pending_updates: false });
+    if (!dw || !dw.ok) {
+      console.error('Erreur Critique Sécurité: Échec de purge du webhook. Description:', dw ? dw.description : 'Réponse invalide');
+      process.exit(1);
+    }
+    console.log('🔒 Webhook purgé avec succès : Mode Long Polling exclusif actif (zéro endpoint HTTP exposé).');
+  } catch (e) {
+    console.error('Erreur Critique Sécurité: Impossible de contacter Telegram pour deleteWebhook. Arrêt immédiat.');
+    process.exit(1);
+  }
   console.log('🤖 Démarrage du Bot Telegram 100% Direct (Audit strict validé)...');
   pollUpdates();
 })();
