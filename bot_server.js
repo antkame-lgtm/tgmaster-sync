@@ -37,7 +37,7 @@ const telegramRequest = (method, data = null) => {
       port: 443,
       path: '/bot' + botToken + '/' + method,
       method: data ? 'POST' : 'GET',
-      rejectUnauthorized: false,
+      rejectUnauthorized: true,
       headers: data ? {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData)
