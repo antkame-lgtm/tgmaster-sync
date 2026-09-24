@@ -38,7 +38,7 @@ class TgMasterPortal {
         port: 443,
         path: u.pathname + u.search,
         method: options.method || (postData ? 'POST' : 'GET'),
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36',
           'Referer': options.referer || 'https://app.tgmaster.com/student',
