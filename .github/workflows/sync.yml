@@ -4,7 +4,10 @@ on:
   schedule:
     # Exécution automatique 3 fois par jour (06h00, 12h00, 18h00 UTC)
     - cron: '0 6,12,18 * * *'
-  workflow_dispatch: # Permet de lancer la synchronisation manuellement en 1 clic
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   sync:
@@ -35,5 +38,5 @@ jobs:
             git commit -m "Auto-sync planning: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
-            console.log "Aucun changement détecté."
+            echo "Aucun changement détecté."
           fi
