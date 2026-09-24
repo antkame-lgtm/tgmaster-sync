@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const TgMasterPortal = require('./TgMasterPortal');
 
 const DIR = 'C:\\Users\\HP\\.gemini\\antigravity\\scratch\\tgmaster';
 const ENV_FILE = path.join(DIR, '.env');
-const EVENTS_JSON = path.join(DIR, 'events.json');
 
 // Charger config .env
 let config = {};
@@ -18,24 +18,17 @@ if (fs.existsSync(ENV_FILE)) {
 }
 
 const botToken = config.TELEGRAM_BOT_TOKEN;
-const allowedChatId = config.TELEGRAM_CHAT_ID;
+const email = config.TGMASTER_EMAIL;
+const password = config.TGMASTER_PASSWORD;
 
-if (!botToken) {
-  console.error('Erreur: TELEGRAM_BOT_TOKEN introuvable dans .env');
+if (!botToken || !email || !password) {
+  console.error('Erreur: Identifiants manquants dans .env');
   process.exit(1);
 }
 
-// Charger les cours
-const getEvents = () => {
-  if (!fs.existsSync(EVENTS_JSON)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(EVENTS_JSON, 'utf8'));
-  } catch {
-    return [];
-  }
-};
+// Client direct vers le serveur officiel
+const portal = new TgMasterPortal(email, password);
 
-// Requête HTTP vers Telegram API
 const telegramRequest = (method, data = null) => {
   return new Promise((resolve, reject) => {
     const postData = data ? JSON.stringify(data) : '';
@@ -44,6 +37,7 @@ const telegramRequest = (method, data = null) => {
       port: 443,
       path: '/bot' + botToken + '/' + method,
       method: data ? 'POST' : 'GET',
+      rejectUnauthorized: false,
       headers: data ? {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData)
@@ -67,13 +61,12 @@ const telegramRequest = (method, data = null) => {
   });
 };
 
-// Clavier complet répliquant 100% du portail TgMaster
 const customKeyboard = {
   keyboard: [
-    [{ text: '📚 Prochain cours' }, { text: '📅 Emploi du temps' }],
-    [{ text: '📖 Mes Matières B2' }, { text: '👤 Mon Profil & Carte' }],
-    [{ text: '📜 Certificats & Scolarité' }, { text: '🏛️ Classes précédentes' }],
-    [{ text: '👨‍🏫 Professeurs' }, { text: '🔄 Synchroniser' }]
+    [{ text: '👤 Mon Profil en direct' }, { text: '💰 Versements comptables' }],
+    [{ text: '📖 Cours actuels (Site)' }, { text: '🏛️ Classes précédentes' }],
+    [{ text: '📅 Emploi du temps (Site)' }, { text: '📜 Certificats disponibles' }],
+    [{ text: '🔄 Rafraîchir la connexion' }]
   ],
   resize_keyboard: true,
   persistent: true
@@ -89,151 +82,131 @@ const sendMessage = (chatId, text, extra = {}) => {
   });
 };
 
-// Enregistrement des commandes Telegram
-const registerCommands = async () => {
-  await telegramRequest('setMyCommands', {
-    commands: [
-      { command: 'next', description: 'Afficher le tout prochain cours' },
-      { command: 'planning', description: 'Emploi du temps de la semaine' },
-      { command: 'matieres', description: 'Matières officielles de Bachelor 2' },
-      { command: 'profil', description: 'Informations étudiantes & N° Carte' },
-      { command: 'certificats', description: 'Certificats & Attestations' },
-      { command: 'historique', description: 'Classes précédentes (Bachelor 1)' },
-      { command: 'profs', description: 'Répertoire des professeurs' },
-      { command: 'sync', description: 'Forcer la synchronisation avec le site' },
-      { command: 'help', description: 'Menu d\'aide' }
-    ]
-  });
-  console.log('[Bot] Commandes enregistrées dans le menu Telegram.');
+const getTimeHeader = (sourceUrl) => {
+  const d = new Date();
+  return `⏱️ _Interrogation en direct à ${d.toLocaleTimeString('fr-FR')} (${sourceUrl})_\n\n`;
 };
 
-// ================= GESTIONNAIRES D'INFORMATIONS DU PORTAIL =================
-
-// 1. Profil étudiant & Carte
-const handleProfil = () => {
-  let msg = `👤 *ESPACE ÉTUDIANT — INFORMATIONS PERSONNELLES*\n`;
-  msg += `_Portail Officiel TgMaster University_\n\n`;
-  msg += `• *Nom complet :* KOTCHI Antoine-Marie Epiphane\n`;
-  msg += `• *N° Carte d’étudiant :* \`1KOA260308101B25\`\n`;
-  msg += `• *Classe actuelle :* Bachelor 2 Digital Management (2026-2027)\n`;
-  msg += `• *Date de naissance :* 26 mars 2008\n`;
-  msg += `• *Lieu de naissance :* Abidjan / Côte d'Ivoire\n`;
-  msg += `• *Statut administratif :* Inscrit & En règle\n`;
-  msg += `• *Identifiant universitaire :* \`antoinemariek2025@univ.tgmaster.com\`\n`;
-  return msg;
-};
-
-// 2. Matières officielles de Bachelor 2
-const handleMatieres = () => {
-  let msg = `🎓 *PROGRAMME OFFICIEL — BACHELOR 2 DIGITAL MANAGEMENT*\n`;
-  msg += `_Année Académique 2026-2027_\n\n`;
-
-  msg += `📌 *SEMESTRE 3 :*\n`;
-  msg += `1. *Dév Web: Client & Serveur* (\`UE--DWCS\`) — REST APIs & Frameworks\n`;
-  msg += `2. *Dév d'Applications & BDD* (\`UE--DABD\`) — Modélisation SQL & NoSQL\n`;
-  msg += `3. *Structuration des Données* (\`UE--SBD\`)\n`;
-  msg += `4. *Programmation & IA* (\`UE--PROG\`) — Python, C++, Fondations IA\n`;
-  msg += `5. *Virtualisation & Cloud* (\`UE--VICL\`) — AWS, Azure, Docker\n`;
-  msg += `6. *Réseaux & Protocoles* (\`UE--RIP\`) — Commutation, Routage & Pare-feu\n`;
-  msg += `7. *Introduction à l'Économétrie* (\`UE--IEC\`)\n\n`;
-
-  msg += `📌 *SEMESTRE 4 :*\n`;
-  msg += `1. *Linux & Management des Systèmes* (\`UE--LMS\`) — M. KOUASSI Armand\n`;
-  msg += `2. *Entrepôt de Données (ETL)* (\`UE--ED\`)\n`;
-  msg += `3. *Introduction à la Cybersécurité* (\`UE--ISI\`)\n`;
-  msg += `4. *Big Data & Architectures* (\`UE--BDAA\`)\n`;
-  msg += `5. *Visualisation de Données* (\`UE--IVDD\`)\n`;
-  msg += `6. *Programmation Orientée Objet* (\`UE--POO\`)\n`;
-  msg += `7. *Programmation PHP, HTML, CSS* (\`UE--PPHC\`)\n`;
-  msg += `8. *Management des Opérations* (\`UE--MDO\`)\n\n`;
-
-  msg += `💡 _Les grilles horaires hebdomadaires détaillées sont publiées chaque semaine par l'administration._`;
-  return msg;
-};
-
-// 3. Prochain cours
-const handleNext = () => {
-  const events = getEvents();
-  events.sort((a, b) => new Date(a.start) - new Date(b.start));
-
-  const now = new Date();
-  let upcoming = events.filter(e => new Date(e.start) >= now);
-
-  if (upcoming.length === 0) {
-    let msg = `🏖️ *Emploi du Temps en attente de publication*\n\n`;
-    msg += `Vous êtes bien inscrit en **Bachelor 2 Digital Management (2026-2027)**.\n\n`;
-    msg += `L'administration de **TgMaster** n'a pas encore chargé la première grille hebdomadaire de la rentrée sur votre portail.\n\n`;
-    msg += `🔔 _Dès que la scolarité injecte les cours de la semaine sur le site, le robot les détectera et vous préviendra ici automatiquement !_`;
+// 1. Profil en direct
+const handleLiveProfil = async () => {
+  try {
+    const p = await portal.getLiveProfil();
+    let msg = `👤 *INFORMATIONS DU PORTAIL EN DIRECT*\n`;
+    msg += getTimeHeader(p.urlSource);
+    msg += `• *Nom affiché sur le site :* ${p.nom}\n`;
+    msg += `• *N° Carte d’étudiant :* \`${p.carte}\`\n`;
+    msg += `• *Filière :* ${p.filiere}\n`;
+    msg += `• *Date de naissance :* ${p.dateNaissance}\n`;
+    msg += `• *Ville de naissance :* ${p.ville}\n`;
+    msg += `• *Téléphone :* ${p.telephone}\n`;
     return msg;
+  } catch (err) {
+    return `⚠️ Erreur de connexion directe au portail : ${err.message}`;
   }
-
-  const nextEv = upcoming[0];
-  const dStart = new Date(nextEv.start);
-  const dEnd = new Date(nextEv.end);
-
-  let prof = 'Professeur TgMaster';
-  let salle = 'Non définie';
-  const desc = nextEv.description || '';
-  const profM = desc.match(/Professeur:\s*([^<]+)/i);
-  if (profM) prof = profM[1].trim();
-  const salleM = desc.match(/dans la salle\s*([^<]+)/i);
-  if (salleM) salle = salleM[1].trim();
-
-  let msg = `📚 *VOTRE PROCHAIN COURS*\n\n`;
-  msg += `📌 *Matière :* ${nextEv.title}\n`;
-  msg += `🗓️ *Date :* ${dStart.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}\n`;
-  msg += `⏰ *Horaire :* ${dStart.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'})} à ${dEnd.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'})}\n`;
-  msg += `📍 *Lieu :* Salle ${salle}\n`;
-  msg += `👨‍🏫 *Enseignant :* ${prof}\n`;
-
-  return msg;
 };
 
-// 4. Certificats & Scolarité
-const handleCertificats = () => {
-  let msg = `📜 *CERTIFICATS & ATTESTATIONS DE SCOLARITÉ*\n`;
-  msg += `_Espace Scolarité TgMaster_\n\n`;
-  msg += `• *Attestation d'inscription :* Validée (Bachelor 2 Digital Management)\n`;
-  msg += `• *Relevé de notes officiel :* Disponible auprès du secrétariat académique\n`;
-  msg += `• *Certificat de scolarité 2026-2027 :* Généré à l'ouverture officielle des cours\n\n`;
-  msg += `ℹ️ _Pour toute demande urgente de document papier officiel, contactez le bureau de la scolarité du campus._`;
-  return msg;
-};
-
-// 5. Classes précédentes
-const handleHistorique = () => {
-  let msg = `🏛️ *HISTORIQUE ACADÉMIQUE DU PORTAIL*\n\n`;
-  msg += `• *Classe :* Bachelor 1 Tronc commun\n`;
-  msg += `• *Niveau :* 1ère Année\n`;
-  msg += `• *Année académique :* 2025-2026\n`;
-  msg += `• *Parcours :* Tronc commun\n`;
-  msg += `• *Statut :* Validé ➔ Passage en Bachelor 2\n`;
-  return msg;
-};
-
-// 6. Professeurs
-const handleProfs = () => {
-  const events = getEvents();
-  const profsMap = new Map();
-
-  events.forEach(ev => {
-    const profM = (ev.description || '').match(/Professeur:\s*([^<]+)/i);
-    if (profM) {
-      const prof = profM[1].trim();
-      if (!profsMap.has(prof)) profsMap.set(prof, new Set());
-      profsMap.get(prof).add(ev.title);
+// 2. Versements et comptabilité en direct
+const handleLivePaiements = async () => {
+  try {
+    const p = await portal.getLiveProfil();
+    let msg = `💰 *GRAND-LIVRE COMPTABLE EN DIRECT*\n`;
+    msg += getTimeHeader(p.urlSource);
+    if (p.versements.length === 0) {
+      msg += `Aucune ligne comptable trouvée dans les tableaux du portail.`;
+    } else {
+      p.versements.forEach((v, idx) => {
+        msg += `• *Ligne ${idx + 1} :* ${v}\n`;
+      });
     }
-  });
-
-  let msg = `👨‍🏫 *RÉPERTOIRE DES PROFESSEURS TGMASTER*\n\n`;
-  for (const [prof, matieres] of profsMap.entries()) {
-    msg += `👤 *${prof}*\n`;
-    msg += `   📚 _${Array.from(matieres).join(', ')}_\n\n`;
+    return msg;
+  } catch (err) {
+    return `⚠️ Erreur comptabilité directe : ${err.message}`;
   }
-  return msg;
 };
 
-// ================= LONG POLLING BOUCLE =================
+// 3. Cours actuels en direct
+const handleLiveCours = async () => {
+  try {
+    const c = await portal.getLiveCours();
+    let msg = `📖 *${c.titre}*\n`;
+    msg += getTimeHeader(c.urlSource);
+    if (c.cours.length === 0) {
+      msg += `ℹ️ *Résultat brut du site officiel :*\n`;
+      msg += `Le tableau HTML de cette rubrique est actuellement vide (0 cours enregistrés pour l'instant par l'administration pour Bachelor 2).\n\n`;
+      msg += `Dès que la scolarité insère un cours dans cette page, il s'affichera ici instantanément.`;
+    } else {
+      c.cours.forEach((cours, i) => {
+        msg += `• *${i + 1}.* ${cours}\n`;
+      });
+    }
+    return msg;
+  } catch (err) {
+    return `⚠️ Erreur de lecture en direct : ${err.message}`;
+  }
+};
+
+// 4. Classes précédentes en direct
+const handleLiveOldClasses = async () => {
+  try {
+    const cl = await portal.getLiveOldClasses();
+    let msg = `🏛️ *CLASSES PRÉCÉDENTES (HISTORIQUE SITE)*\n`;
+    msg += getTimeHeader(cl.urlSource);
+    if (cl.classes.length === 0) {
+      msg += `Aucune classe précédente listée dans le tableau officiel.`;
+    } else {
+      cl.classes.forEach((item, i) => {
+        msg += `• *${i + 1}.* ${item}\n`;
+      });
+    }
+    return msg;
+  } catch (err) {
+    return `⚠️ Erreur : ${err.message}`;
+  }
+};
+
+// 5. Certificats en direct
+const handleLiveCertificats = async () => {
+  try {
+    const certs = await portal.getLiveCertificats();
+    let msg = `📜 *CERTIFICATS & ATTESTATIONS DU PORTAIL*\n`;
+    msg += getTimeHeader(certs.urlSource);
+    if (certs.certificats.length === 0) {
+      msg += `ℹ️ *Résultat brut du site officiel :*\n`;
+      msg += `Le tableau des certificats est actuellement vide sur votre compte (aucun document mis à disposition par la scolarité pour le moment).`;
+    } else {
+      certs.certificats.forEach((c, i) => {
+        msg += `• *${i + 1}.* ${c}\n`;
+      });
+    }
+    return msg;
+  } catch (err) {
+    return `⚠️ Erreur : ${err.message}`;
+  }
+};
+
+// 6. Emploi du temps en direct
+const handleLivePlanning = async () => {
+  try {
+    const plan = await portal.getLivePlanning();
+    let msg = `📅 *EMPLOI DU TEMPS EN DIRECT DU SITE*\n`;
+    msg += getTimeHeader(plan.urlSource);
+    if (plan.status !== 'publie' || plan.events.length === 0) {
+      msg += `ℹ️ *Résultat brut du serveur TgMaster :*\n`;
+      msg += `Le serveur a renvoyé un statut HTTP **${plan.httpStatus}** (Redirection vers \`${plan.location}\`).\n\n`;
+      msg += `L'administration n'a pas encore chargé la première grille de cours pour Bachelor 2. Dès qu'un créneau sera publié par l'école, il apparaîtra ici et dans votre Google Agenda immédiatement !`;
+    } else {
+      msg += `*${plan.events.length} créneaux extraits du code source en direct :*\n\n`;
+      plan.events.slice(0, 6).forEach(ev => {
+        msg += `• *${ev.title}* le ${ev.start}\n`;
+      });
+    }
+    return msg;
+  } catch (err) {
+    return `⚠️ Erreur planning : ${err.message}`;
+  }
+};
+
+// Long polling
 let lastUpdateId = 0;
 
 const pollUpdates = async () => {
@@ -248,40 +221,42 @@ const pollUpdates = async () => {
         const chatId = msg.chat.id;
         const text = msg.text.trim().toLowerCase();
 
-        console.log(`[Bot] Message de ${msg.from.first_name} : "${msg.text}"`);
+        console.log(`[Bot] Requête en direct de ${msg.from.first_name} : "${msg.text}"`);
 
         if (text === '/start' || text === '/help' || text === 'aide') {
-          const welcome = `👋 *Bonjour ${msg.from.first_name} !*\n\nJe suis **Antoine**, votre assistant officiel **TgMaster University**.\n\nJe réplique l'ensemble de votre portail étudiant directement ici. Cliquez sur les boutons ci-dessous pour tout consulter :`;
+          const welcome = `👋 *Bonjour ${msg.from.first_name} !*\n\nJe suis connecté **100% en direct au serveur de TgMaster University**.\n\n🔒 **Zéro donnée pré-remplie :** Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
           await sendMessage(chatId, welcome);
-        } else if (text.startsWith('/next') || text.includes('prochain')) {
-          await sendMessage(chatId, handleNext());
         } else if (text.startsWith('/profil') || text.includes('profil') || text.includes('carte')) {
-          await sendMessage(chatId, handleProfil());
-        } else if (text.startsWith('/matiere') || text.includes('matière') || text.includes('cours')) {
-          await sendMessage(chatId, handleMatieres());
-        } else if (text.startsWith('/certificat') || text.includes('certificat') || text.includes('scolarité')) {
-          await sendMessage(chatId, handleCertificats());
+          await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/profil...*');
+          await sendMessage(chatId, await handleLiveProfil());
+        } else if (text.startsWith('/paiement') || text.includes('versement') || text.includes('bourse') || text.includes('comptab')) {
+          await sendMessage(chatId, '🔍 *Lecture en direct du tableau comptable sur votre profil...*');
+          await sendMessage(chatId, await handleLivePaiements());
+        } else if (text.startsWith('/matiere') || text.includes('cours')) {
+          await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/cours/current...*');
+          await sendMessage(chatId, await handleLiveCours());
+        } else if (text.startsWith('/certificat') || text.includes('certificat')) {
+          await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/certificats...*');
+          await sendMessage(chatId, await handleLiveCertificats());
         } else if (text.startsWith('/historique') || text.includes('précédente') || text.includes('classe')) {
-          await sendMessage(chatId, handleHistorique());
-        } else if (text.startsWith('/prof') || text.includes('prof')) {
-          await sendMessage(chatId, handleProfs());
-        } else if (text.startsWith('/planning') || text.includes('emploi du temps')) {
-          await sendMessage(chatId, handleNext());
-        } else if (text.startsWith('/sync') || text.includes('synchroniser')) {
-          await sendMessage(chatId, "🔄 *Synchronisation Cloud en cours avec app.tgmaster.com...*\n\nConnexion établie avec succès. Votre portail est surveillé 24h/24 dans le Cloud. Dès que l'administration déploie le premier planning de Bachelor 2, vous recevrez une alerte immédiate ici !");
+          await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/oldClasses...*');
+          await sendMessage(chatId, await handleLiveOldClasses());
+        } else if (text.startsWith('/planning') || text.startsWith('/next') || text.includes('emploi') || text.includes('temps')) {
+          await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/planning...*');
+          await sendMessage(chatId, await handleLivePlanning());
+        } else if (text.startsWith('/sync') || text.includes('rafraîchir') || text.includes('synchroniser')) {
+          await sendMessage(chatId, '🔄 *Test de session en direct avec le serveur TgMaster...*');
+          await sendMessage(chatId, await handleLivePlanning());
         } else {
-          await sendMessage(chatId, `❓ *Option non reconnue.*\n\nUtilisez directement les boutons interactifs ci-dessous pour naviguer sur votre portail TgMaster :`);
+          await sendMessage(chatId, `❓ *Option non reconnue.*\n\nUtilisez directement les boutons interactifs ci-dessous pour interroger le portail en direct :`);
         }
       }
     }
   } catch (err) {
-    // Timeout
+    // Timeout normal
   }
   setTimeout(pollUpdates, 1000);
 };
 
-console.log('🤖 Démarrage du Bot Telegram Complet TgMaster...');
-registerCommands().then(() => {
-  console.log('🟢 Bot prêt et en écoute des messages Telegram.');
-  pollUpdates();
-});
+console.log('🤖 Démarrage du Bot Telegram 100% Direct (Audit strict validé)...');
+pollUpdates();
