@@ -262,6 +262,29 @@ const canSendOutboundRefusal = () => {
   return true;
 };
 
+// Plafond global d'alertes vers le propriétaire (Anti-Flood Sybil : max 5 alertes/minute tous intrus confondus)
+let globalAlertCount = 0;
+let globalAlertReset = Date.now();
+let alertSpikeNotified = false;
+
+const canSendOwnerAlert = () => {
+  const now = Date.now();
+  if (now - globalAlertReset > 60000) {
+    globalAlertCount = 0;
+    globalAlertReset = now;
+    alertSpikeNotified = false;
+  }
+  if (globalAlertCount >= 5) {
+    if (!alertSpikeNotified) {
+      alertSpikeNotified = true;
+      return 'SPIKE_WARNING';
+    }
+    return false; // Abandon silencieux au-delà de 5 alertes/minute
+  }
+  globalAlertCount++;
+  return true;
+};
+
 // Long polling
 let lastUpdateId = 0;
 
@@ -286,7 +309,7 @@ const pollUpdates = async () => {
 
         const chatId = msg.chat.id;
         const chatType = msg.chat.type;
-        const fromId = msg.from ? msg.from.id : null;
+        const fromId = msg.from?.id || null;
         const text = msg.text.trim().toLowerCase();
 
         // 🛡️ SÉCURITÉ ABSOLUE : TYPE PRIVÉ EXCLUSIF + DOUBLE WHITELIST SÉPARÉE (CHAT + USER) - FAIL-CLOSED
@@ -332,16 +355,28 @@ const pollUpdates = async () => {
             }
           }
 
-          // Alerte propriétaire en TEXTE BRUT pur avec valeurs encadrées
+          // Alerte propriétaire en TEXTE BRUT pur avec double protection (per-clé + plafond global anti-Sybil 5/min)
           if (!intruderAlertCooldowns.get(chatId)) {
             intruderAlertCooldowns.set(chatId, Date.now());
-            try {
-              await telegramRequest('sendMessage', {
-                chat_id: allowedChatId,
-                text: `[ALERTE SECURITE] Tentative bloquée !\n• Type chat : "${chatType}"\n• Utilisateur : ${safeIntruder}\n• ID Telegram : ${chatId}\n• Message : ${safeText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
-              });
-            } catch (err) {
-              console.warn('[Bot] Échec envoi alerte propriétaire :', err.message); // R9
+            const alertStatus = canSendOwnerAlert();
+            if (alertStatus === true) {
+              try {
+                await telegramRequest('sendMessage', {
+                  chat_id: allowedChatId,
+                  text: `[ALERTE SECURITE] Tentative bloquée !\n• Type chat : "${chatType}"\n• Utilisateur : ${safeIntruder}\n• ID Telegram : ${chatId}\n• Message : ${safeText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
+                });
+              } catch (err) {
+                console.warn('[Bot] Échec envoi alerte propriétaire :', err.message); // R9
+              }
+            } else if (alertStatus === 'SPIKE_WARNING') {
+              try {
+                await telegramRequest('sendMessage', {
+                  chat_id: allowedChatId,
+                  text: `[ALERTE SECURITE CRITIQUE] Pic d'attaques distribuées détecté (> 5 tentatives d'accès distinctes en 1 min). Les alertes individuelles suivantes sont temporairement réduites au silence pour protéger vos notifications.`
+                });
+              } catch (err) {
+                console.warn('[Bot] Échec envoi notification pic d\'attaque :', err.message);
+              }
             }
           }
 
@@ -356,10 +391,10 @@ const pollUpdates = async () => {
         }
         global.lastUserCommand = nowReq;
 
-        console.log(`[Bot] Requête autorisée de ${msg.from.first_name} : "${msg.text}"`);
+        console.log(`[Bot] Requête autorisée de ${msg.from?.first_name || 'Propriétaire'} : "${msg.text}"`);
 
         if (text === '/start' || text === '/help' || text === 'aide') {
-          const welcome = `👋 *Bonjour ${msg.from.first_name} !*\n\nJe suis connecté **100% en direct au serveur de TgMaster University**.\n\n🔒 **Zéro donnée pré-remplie :** Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
+          const welcome = `👋 *Bonjour ${msg.from?.first_name || 'Étudiant'} !*\n\nJe suis connecté **100% en direct au serveur de TgMaster University**.\n\n🔒 **Zéro donnée pré-remplie :** Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
           await sendMessage(chatId, welcome);
         } else if (text.startsWith('/profil') || text.includes('profil') || text.includes('carte')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/profil...*');
