@@ -240,8 +240,8 @@ const pollUpdates = async () => {
           if (!global.lastAlertTime) global.lastAlertTime = {};
           if (!global.lastAlertTime[chatId] || (now - global.lastAlertTime[chatId] > 30000)) {
             global.lastAlertTime[chatId] = now;
-            const safeIntruder = String(intruder).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
-            const safeText = String(msg.text).substring(0, 80).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
+            const safeIntruder = String(intruder).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+            const safeText = String(msg.text).substring(0, 80).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
             await telegramRequest('sendMessage', {
               chat_id: allowedChatId,
               text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${safeIntruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${safeText}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
