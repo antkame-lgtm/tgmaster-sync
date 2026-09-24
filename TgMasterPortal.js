@@ -115,13 +115,26 @@ class TgMasterPortal {
     const nameMatch = html.match(/<h3 class="mb-2">([^<]+)<\/h3>/i) ||
                       html.match(/<h6 class="mb-0 dropdown-user-name">([^<]+)<\/h6>/i);
 
-    // Extraction des versements comptables réels
+    // Extraction des versements comptables réels et échéancier
     const versements = [];
+    const echeances = [];
     const trMatches = html.match(/<tr>[\s\S]*?<\/tr>/gi) || [];
     trMatches.forEach(tr => {
-      const clean = tr.replace(/<[^>]+>/g, '|').split('|').map(s => s.trim()).filter(Boolean);
-      if (clean.length >= 3 && clean.some(c => c.includes('FCFA'))) {
-        versements.push(clean.join(' — '));
+      const tds = (tr.match(/<td[^>]*>([\s\S]*?)<\/td>/gi) || []).map(td => {
+        return td.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      });
+      if (tds.length >= 3 && tds.some(td => td.includes('FCFA'))) {
+        versements.push({
+          date: tds[0] || '',
+          montant: tds[1] || '',
+          motif: tds[2] || '',
+          agent: tds.length >= 6 ? tds[5] : (tds[tds.length - 1] || '')
+        });
+      } else if (tds.length === 2 && tds.some(td => td.includes('FCFA'))) {
+        echeances.push({
+          date: tds[0] || '',
+          montant: tds[1] || ''
+        });
       }
     });
 
@@ -133,6 +146,7 @@ class TgMasterPortal {
       telephone: phoneMatch ? phoneMatch[1].trim() : '[Non renseigné sur la page]',
       filiere: filiereMatch ? filiereMatch[1].trim() : '[Non renseigné sur la page]',
       versements: versements,
+      echeances: echeances,
       urlSource: 'https://app.tgmaster.com/student/profil'
     };
   }
