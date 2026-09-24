@@ -61,7 +61,7 @@ http.createServer((req, res) => {
   console.log(`🌐 Serveur Keep-Alive Render actif sur le port ${PORT}`);
 });
 
-const telegramRequest = (method, data = null) => {
+const telegramRequest = (method, data = null, timeoutMs = 25000) => {
   return new Promise((resolve, reject) => {
     const postData = data ? JSON.stringify(data) : '';
     const options = {
@@ -96,8 +96,8 @@ const telegramRequest = (method, data = null) => {
         }
       });
     });
-    req.setTimeout(15000, () => {
-      req.destroy(new Error('Délai d\'attente Telegram dépassé (15s)'));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Délai d'attente Telegram dépassé (${timeoutMs}ms)`));
     });
     req.on('error', reject);
     if (data) req.write(postData);
@@ -116,14 +116,23 @@ const customKeyboard = {
   persistent: true
 };
 
-const sendMessage = (chatId, text, extra = {}) => {
-  return telegramRequest('sendMessage', {
+const sendMessage = async (chatId, text, extra = {}) => {
+  const payload = {
     chat_id: chatId,
     text,
     parse_mode: 'Markdown',
     reply_markup: customKeyboard,
     ...extra
-  });
+  };
+  const res = await telegramRequest('sendMessage', payload);
+  if (!res || !res.ok) {
+    if (res && res.description && res.description.includes('can\'t parse entities')) {
+      console.warn('[Bot] Erreur parsing Markdown Telegram :', res.description, '-> Repli transparent en texte brut');
+      delete payload.parse_mode;
+      return telegramRequest('sendMessage', payload);
+    }
+  }
+  return res;
 };
 
 const getTimeHeader = (sourceUrl) => {
@@ -155,12 +164,19 @@ const handleLivePaiements = async () => {
     const p = await portal.getLiveProfil();
     let msg = `💰 *GRAND-LIVRE COMPTABLE EN DIRECT*\n`;
     msg += getTimeHeader(p.urlSource);
-    if (p.versements.length === 0) {
+    if (!p.versements || p.versements.length === 0) {
       msg += `Aucune ligne comptable trouvée dans les tableaux du portail.`;
     } else {
-      p.versements.forEach((v, idx) => {
-        msg += `• *Ligne ${idx + 1} :* ${v}\n`;
+      msg += `*Historique des versements enregistrés :*\n\n`;
+      p.versements.forEach((v) => {
+        msg += `• *${v.date}* : \`${v.montant}\` — ${v.motif}${v.agent ? ` _(${v.agent})_` : ''}\n`;
       });
+      if (p.echeances && p.echeances.length > 0) {
+        msg += `\n⏳ *Prochaines échéances prévues :*\n`;
+        p.echeances.forEach(e => {
+          msg += `• *${e.date}* : \`${e.montant}\`\n`;
+        });
+      }
     }
     return msg;
   } catch (err) {
@@ -236,7 +252,7 @@ const handleLivePlanning = async () => {
     msg += getTimeHeader(plan.urlSource);
     if (plan.status !== 'publie' || plan.events.length === 0) {
       msg += `ℹ️ *Résultat brut du serveur TgMaster :*\n`;
-      msg += `Le serveur a renvoyé un statut HTTP **${plan.httpStatus}** (Redirection vers \`${plan.location}\`).\n\n`;
+      msg += `Le serveur a renvoyé un statut HTTP *${plan.httpStatus}* (Redirection vers \`${plan.location}\`).\n\n`;
       msg += `L'administration n'a pas encore chargé la première grille de cours pour Bachelor 2. Dès qu'un créneau sera publié par l'école, il apparaîtra ici et dans votre Google Agenda immédiatement !`;
     } else {
       msg += `*${plan.events.length} créneaux extraits du code source en direct :*\n\n`;
@@ -321,8 +337,8 @@ let lastUpdateId = 0;
 
 const pollUpdates = async () => {
   try {
-    // R2: Filtrage strict au niveau API Telegram (messages texte uniquement)
-    const res = await telegramRequest(`getUpdates?offset=${lastUpdateId + 1}&timeout=30&allowed_updates=%5B%22message%22%5D`);
+    // R2: Filtrage strict au niveau API Telegram (messages texte uniquement, polling 15s / socket 25s)
+    const res = await telegramRequest(`getUpdates?offset=${lastUpdateId + 1}&timeout=15&allowed_updates=%5B%22message%22%5D`, null, 25000);
     if (res.ok && res.result && Array.isArray(res.result)) {
       for (const update of res.result) {
         lastUpdateId = update.update_id;
@@ -424,28 +440,28 @@ const pollUpdates = async () => {
 
         console.log(`[Bot] Requête autorisée de ${msg.from?.first_name || 'Propriétaire'} : "${msg.text}"`);
 
-        if (text === '/start' || text === '/help' || text === 'aide') {
-          const welcome = `👋 *Bonjour ${msg.from?.first_name || 'Étudiant'} !*\n\nJe suis connecté **100% en direct au serveur de TgMaster University**.\n\n🔒 **Zéro donnée pré-remplie :** Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
+        if (text.startsWith('/start') || text.startsWith('/help') || text === 'aide') {
+          const welcome = `👋 *Bonjour ${msg.from?.first_name || 'Étudiant'} !*\n\nJe suis connecté *100% en direct au serveur de TgMaster University*.\n\n🔒 *Zéro donnée pré-remplie :* Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
           await sendMessage(chatId, welcome);
         } else if (text.startsWith('/profil') || text.includes('profil') || text.includes('carte')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/profil...*');
           await sendMessage(chatId, await handleLiveProfil());
-        } else if (text.startsWith('/paiement') || text.includes('versement') || text.includes('bourse') || text.includes('comptab')) {
+        } else if (text.startsWith('/paiement') || text.startsWith('/versement') || text.includes('versement') || text.includes('bourse') || text.includes('comptab') || text.includes('echeance')) {
           await sendMessage(chatId, '🔍 *Lecture en direct du tableau comptable sur votre profil...*');
           await sendMessage(chatId, await handleLivePaiements());
-        } else if (text.startsWith('/matiere') || text.includes('cours')) {
+        } else if (text.startsWith('/cours') || text.startsWith('/matiere') || text.includes('cours') || text.includes('matiere')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/cours/current...*');
           await sendMessage(chatId, await handleLiveCours());
-        } else if (text.startsWith('/certificat') || text.includes('certificat')) {
+        } else if (text.startsWith('/certificat') || text.includes('certificat') || text.includes('attestation')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/certificats...*');
           await sendMessage(chatId, await handleLiveCertificats());
-        } else if (text.startsWith('/historique') || text.includes('précédente') || text.includes('classe')) {
+        } else if (text.startsWith('/historique') || text.startsWith('/classe') || text.includes('précédente') || text.includes('precedente') || text.includes('classe')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/oldClasses...*');
           await sendMessage(chatId, await handleLiveOldClasses());
-        } else if (text.startsWith('/planning') || text.startsWith('/next') || text.includes('emploi') || text.includes('temps')) {
+        } else if (text.startsWith('/planning') || text.startsWith('/next') || text.startsWith('/agenda') || text.includes('emploi') || text.includes('temps') || text.includes('planning')) {
           await sendMessage(chatId, '🔍 *Interrogation en direct de app.tgmaster.com/student/planning...*');
           await sendMessage(chatId, await handleLivePlanning());
-        } else if (text.startsWith('/sync') || text.includes('rafraîchir') || text.includes('synchroniser')) {
+        } else if (text.startsWith('/sync') || text.includes('rafraîchir') || text.includes('rafraichir') || text.includes('synchroniser')) {
           await sendMessage(chatId, '🔄 *Test de session en direct avec le serveur TgMaster...*');
           await sendMessage(chatId, await handleLivePlanning());
         } else {
