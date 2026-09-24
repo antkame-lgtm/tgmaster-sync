@@ -3,10 +3,9 @@ const path = require('path');
 const https = require('https');
 const TgMasterPortal = require('./TgMasterPortal');
 
-const DIR = 'C:\\Users\\HP\\.gemini\\antigravity\\scratch\\tgmaster';
-const ENV_FILE = path.join(DIR, '.env');
+const ENV_FILE = path.join(__dirname, '.env');
 
-// Charger config .env
+// Charger config .env si présent
 let config = {};
 if (fs.existsSync(ENV_FILE)) {
   fs.readFileSync(ENV_FILE, 'utf8').split('\n').forEach(line => {
@@ -17,12 +16,13 @@ if (fs.existsSync(ENV_FILE)) {
   });
 }
 
-const botToken = config.TELEGRAM_BOT_TOKEN;
-const email = config.TGMASTER_EMAIL;
-const password = config.TGMASTER_PASSWORD;
+const botToken = process.env.TELEGRAM_BOT_TOKEN || config.TELEGRAM_BOT_TOKEN;
+const email = process.env.TGMASTER_EMAIL || config.TGMASTER_EMAIL;
+const password = process.env.TGMASTER_PASSWORD || config.TGMASTER_PASSWORD;
+const allowedChatId = process.env.TELEGRAM_CHAT_ID || config.TELEGRAM_CHAT_ID;
 
 if (!botToken || !email || !password) {
-  console.error('Erreur: Identifiants manquants dans .env');
+  console.error('Erreur: Identifiants manquants (TELEGRAM_BOT_TOKEN, TGMASTER_EMAIL, TGMASTER_PASSWORD)');
   process.exit(1);
 }
 
@@ -221,7 +221,14 @@ const pollUpdates = async () => {
         const chatId = msg.chat.id;
         const text = msg.text.trim().toLowerCase();
 
-        console.log(`[Bot] Requête en direct de ${msg.from.first_name} : "${msg.text}"`);
+        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE
+        if (allowedChatId && String(chatId) !== String(allowedChatId)) {
+          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${msg.from?.first_name || 'Inconnu'}`);
+          await sendMessage(chatId, `⛔ *Accès strictement refusé.*\n\nCe bot est un assistant privé sécurisé. Votre compte Telegram n'est pas autorisé à consulter ces données académiques.`);
+          continue;
+        }
+
+        console.log(`[Bot] Requête autorisée de ${msg.from.first_name} : "${msg.text}"`);
 
         if (text === '/start' || text === '/help' || text === 'aide') {
           const welcome = `👋 *Bonjour ${msg.from.first_name} !*\n\nJe suis connecté **100% en direct au serveur de TgMaster University**.\n\n🔒 **Zéro donnée pré-remplie :** Chaque appui sur un bouton exécute une requête HTTP en direct sur votre compte étudiant et extrait les données brutes du site officiel.\n\nChoisissez une rubrique ci-dessous :`;
