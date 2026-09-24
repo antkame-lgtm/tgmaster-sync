@@ -206,6 +206,7 @@ class TgMasterPortal {
 
   // Analyseur lexical de crochets pour extraire un tableau JSON sans fragilité regex
   extractJsonArray(text, startIndex) {
+    if (!text || startIndex < 0 || text[startIndex] !== '[') return null;
     let depth = 0;
     let inString = false;
     let stringChar = '';
@@ -257,7 +258,8 @@ class TgMasterPortal {
     if (match) {
       const bracketIdx = match.index + match[0].lastIndexOf('[');
       const jsonSnippet = this.extractJsonArray(res.data, bracketIdx);
-      if (jsonSnippet && jsonSnippet.length < 2 * 1024 * 1024) { // Limite de 2 Mo max pour le JSON
+      // Borne stricte AVANT tout appel JSON.parse (500 Ko max pour prévenir toute allocation mémoire excessive)
+      if (jsonSnippet && jsonSnippet.length <= 500000) {
         try {
           const parsed = JSON.parse(jsonSnippet);
           if (Array.isArray(parsed)) {
