@@ -235,12 +235,17 @@ const pollUpdates = async () => {
             reply_markup: { remove_keyboard: true }
           });
 
-          // Alerter immédiatement le propriétaire légitime
-          await telegramRequest('sendMessage', {
-            chat_id: allowedChatId,
-            text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${intruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${msg.text}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
-            parse_mode: 'Markdown'
-          });
+          // Alerte temps réel anti-bombing (au max 1 alerte toutes les 30s par intrus)
+          const now = Date.now();
+          if (!global.lastAlertTime) global.lastAlertTime = {};
+          if (!global.lastAlertTime[chatId] || (now - global.lastAlertTime[chatId] > 30000)) {
+            global.lastAlertTime[chatId] = now;
+            await telegramRequest('sendMessage', {
+              chat_id: allowedChatId,
+              text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${intruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${msg.text}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
+              parse_mode: 'Markdown'
+            });
+          }
 
           continue;
         }
