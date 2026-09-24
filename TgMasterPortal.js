@@ -52,11 +52,23 @@ class TgMasterPortal {
         reqOptions.headers['Content-Type'] = 'application/x-www-form-urlencoded';
       }
 
+      const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 Mo maximum pour prévenir l'épuisement mémoire
       const req = https.request(reqOptions, res => {
         this.mergeCookies(res.headers['set-cookie']);
         let data = '';
-        res.on('data', c => data += c);
+        let totalBytes = 0;
+        res.on('data', c => {
+          totalBytes += c.length;
+          if (totalBytes > MAX_RESPONSE_BYTES) {
+            req.destroy(new Error('Réponse serveur dépassant la limite de sécurité (5 Mo)'));
+            return;
+          }
+          data += c;
+        });
         res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, data }));
+      });
+      req.setTimeout(15000, () => {
+        req.destroy(new Error('Délai d\'attente réseau dépassé sur le portail (15s)'));
       });
       req.on('error', reject);
       if (postData) req.write(postData);
@@ -192,7 +204,40 @@ class TgMasterPortal {
     };
   }
 
-  // 5. Emploi du temps extrait 100% en direct
+  // Analyseur lexical de crochets pour extraire un tableau JSON sans fragilité regex
+  extractJsonArray(text, startIndex) {
+    let depth = 0;
+    let inString = false;
+    let stringChar = '';
+    let escape = false;
+    for (let i = startIndex; i < text.length; i++) {
+      const c = text[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+      if (inString) {
+        if (c === stringChar) inString = false;
+      } else {
+        if (c === '"' || c === "'") {
+          inString = true;
+          stringChar = c;
+        } else if (c === '[') {
+          depth++;
+        } else if (c === ']') {
+          depth--;
+          if (depth === 0) return text.substring(startIndex, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  // 5. Emploi du temps extrait 100% en direct via analyseur lexical robuste
   async getLivePlanning() {
     await this.ensureLogin();
     const res = await this.request('/student/planning');
@@ -206,25 +251,32 @@ class TgMasterPortal {
       };
     }
 
-    const scriptRegex = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
-    let match;
     let events = [];
-    while ((match = scriptRegex.exec(res.data)) !== null) {
-      const sc = match[1];
-      if (sc.includes('new FullCalendar.Calendar') && sc.includes('events:')) {
-        const evMatch = sc.match(/events\s*:\s*(\[[\s\S]*?\])\s*,\s*[a-zA-Z]/m) ||
-                        sc.match(/events\s*:\s*(\[[\s\S]*?\])\s*\}\s*\)/m);
-        if (evMatch && evMatch[1]) {
-          try {
-            const parsed = JSON.parse(evMatch[1]);
-            if (Array.isArray(parsed)) {
-              // Validation de schéma stricte : filtrer uniquement les objets valides
-              events = parsed.filter(item => item && typeof item === 'object' && typeof item.title === 'string');
-              break;
-            }
-          } catch (e) {
-            // Rejet silencieux si JSON malformé (zéro eval / zéro Function)
+    const eventsPattern = /events\s*:\s*\[/;
+    const match = eventsPattern.exec(res.data);
+    if (match) {
+      const bracketIdx = match.index + match[0].lastIndexOf('[');
+      const jsonSnippet = this.extractJsonArray(res.data, bracketIdx);
+      if (jsonSnippet && jsonSnippet.length < 2 * 1024 * 1024) { // Limite de 2 Mo max pour le JSON
+        try {
+          const parsed = JSON.parse(jsonSnippet);
+          if (Array.isArray(parsed)) {
+            // Validation de schéma stricte et typage complet (titre, date ISO, borne max 500)
+            events = parsed
+              .filter(item => (
+                item &&
+                typeof item === 'object' &&
+                typeof item.title === 'string' &&
+                item.title.trim().length > 0 &&
+                item.title.length <= 250 &&
+                typeof item.start === 'string' &&
+                item.start.length <= 50 &&
+                (!item.end || (typeof item.end === 'string' && item.end.length <= 50))
+              ))
+              .slice(0, 500);
           }
+        } catch (e) {
+          // Rejet silencieux si JSON malformé (zéro eval / zéro Function)
         }
       }
     }
