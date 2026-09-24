@@ -21,8 +21,8 @@ const email = process.env.TGMASTER_EMAIL || config.TGMASTER_EMAIL;
 const password = process.env.TGMASTER_PASSWORD || config.TGMASTER_PASSWORD;
 const allowedChatId = process.env.TELEGRAM_CHAT_ID || config.TELEGRAM_CHAT_ID;
 
-if (!botToken || !email || !password) {
-  console.error('Erreur: Identifiants manquants (TELEGRAM_BOT_TOKEN, TGMASTER_EMAIL, TGMASTER_PASSWORD)');
+if (!botToken || !email || !password || !allowedChatId) {
+  console.error('Erreur Critique Sécurité: Identifiants ou TELEGRAM_CHAT_ID manquant. Arrêt d\'urgence (Fail-Closed).');
   process.exit(1);
 }
 
@@ -221,8 +221,8 @@ const pollUpdates = async () => {
         const chatId = msg.chat.id;
         const text = msg.text.trim().toLowerCase();
 
-        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE (CHAT ID)
-        if (allowedChatId && String(chatId) !== String(allowedChatId)) {
+        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE (CHAT ID) - FAIL-CLOSED
+        if (!allowedChatId || String(chatId) !== String(allowedChatId)) {
           const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
           console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${intruder}, Texte: "${msg.text}"`);
           
