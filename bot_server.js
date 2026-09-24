@@ -294,10 +294,11 @@ const pollUpdates = async () => {
           if (!intruderAlertCooldowns.get(chatId)) {
             intruderAlertCooldowns.set(chatId, Date.now());
             try {
-              const safeCleanText = String(msg.text).substring(0, 100);
+              const safeCleanText = String(msg.text || '').substring(0, 100).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+              const safeIntruder = String(intruder).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
               await telegramRequest('sendMessage', {
                 chat_id: allowedChatId,
-                text: `[ALERTE SECURITE] Tentative d'accès bloquée !\n\n- Type chat : ${chatType}\n- Utilisateur : ${intruder}\n- ID Telegram : ${chatId}\n- Message : ${safeCleanText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
+                text: `[ALERTE SECURITE] Tentative d'accès bloquée !\n\n- Type chat : ${chatType}\n- Utilisateur : ${safeIntruder}\n- ID Telegram : ${chatId}\n- Message : ${safeCleanText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
               });
             } catch (_) {}
           }
@@ -353,7 +354,7 @@ const pollUpdates = async () => {
 // Démarrage sécurisé : suppression explicite de tout webhook avec vérification stricte (Fail-Closed)
 (async () => {
   try {
-    const dw = await telegramRequest('deleteWebhook', { drop_pending_updates: false });
+    const dw = await telegramRequest('deleteWebhook', { drop_pending_updates: true });
     if (!dw || !dw.ok) {
       console.error('Erreur Critique Sécurité: Échec de purge du webhook. Description:', dw ? dw.description : 'Réponse invalide');
       process.exit(1);
