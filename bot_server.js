@@ -240,15 +240,25 @@ const pollUpdates = async () => {
           if (!global.lastAlertTime) global.lastAlertTime = {};
           if (!global.lastAlertTime[chatId] || (now - global.lastAlertTime[chatId] > 30000)) {
             global.lastAlertTime[chatId] = now;
+            const safeIntruder = String(intruder).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
+            const safeText = String(msg.text).substring(0, 80).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$1');
             await telegramRequest('sendMessage', {
               chat_id: allowedChatId,
-              text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${intruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${msg.text}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
+              text: `🚨 *ALERTE SÉCURITÉ : Tentative d'accès non autorisée bloquée !*\n\n• *De :* ${safeIntruder}\n• *ID Telegram :* \`${chatId}\`\n• *Message tenté :* \`${safeText}\`\n\n🔒 _L'accès aux données TgMaster a été bloqué à 100%._`,
               parse_mode: 'Markdown'
             });
           }
 
           continue;
         }
+
+        // Rate-limiting utilisateur légitime (1 commande toutes les 1.5s max pour préserver le portail)
+        const nowReq = Date.now();
+        if (global.lastUserCommand && (nowReq - global.lastUserCommand < 1500)) {
+          await sendMessage(chatId, '⏱️ _Veuillez patienter un instant entre deux clics..._');
+          continue;
+        }
+        global.lastUserCommand = nowReq;
 
         console.log(`[Bot] Requête autorisée de ${msg.from.first_name} : "${msg.text}"`);
 
