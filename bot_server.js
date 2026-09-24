@@ -236,7 +236,8 @@ class BoundedTtlCache {
     return entry.val;
   }
   set(key, val) {
-    if (this.map.size >= this.maxSize) {
+    // R6: Éviction uniquement si la clé est nouvelle et que le cache est plein
+    if (!this.map.has(key) && this.map.size >= this.maxSize) {
       const oldestKey = this.map.keys().next().value;
       this.map.delete(oldestKey);
     }
@@ -247,17 +248,41 @@ class BoundedTtlCache {
 const intruderCooldowns = new BoundedTtlCache(100, 60000); // 60s cooldown de réponse par intrus
 const intruderAlertCooldowns = new BoundedTtlCache(50, 120000); // 2min cooldown alertes propriétaire
 
+// R5: Quota global sortant pour les réponses intrus (max 20 messages de refus par minute)
+let globalOutboundCount = 0;
+let globalOutboundReset = Date.now();
+const canSendOutboundRefusal = () => {
+  const now = Date.now();
+  if (now - globalOutboundReset > 60000) {
+    globalOutboundCount = 0;
+    globalOutboundReset = now;
+  }
+  if (globalOutboundCount >= 20) return false;
+  globalOutboundCount++;
+  return true;
+};
+
 // Long polling
 let lastUpdateId = 0;
 
 const pollUpdates = async () => {
   try {
-    const res = await telegramRequest(`getUpdates?offset=${lastUpdateId + 1}&timeout=30`);
-    if (res.ok && res.result && res.result.length > 0) {
+    // R2: Filtrage strict au niveau API Telegram (messages texte uniquement)
+    const res = await telegramRequest(`getUpdates?offset=${lastUpdateId + 1}&timeout=30&allowed_updates=%5B%22message%22%5D`);
+    if (res.ok && res.result && Array.isArray(res.result)) {
       for (const update of res.result) {
         lastUpdateId = update.update_id;
         const msg = update.message;
-        if (!msg || !msg.text) continue;
+
+        // R2: Gardes structurelles complètes (élimine tout risque de TypeError sur msg ou msg.chat)
+        if (!msg || typeof msg !== 'object' || !msg.chat || typeof msg.chat.id === 'undefined' || typeof msg.text !== 'string') {
+          continue;
+        }
+
+        // R4: Anti-replay des messages périmés accumulés pendant une coupure (seuil: 120s)
+        if (msg.date && ((Date.now() / 1000) - msg.date > 120)) {
+          continue;
+        }
 
         const chatId = msg.chat.id;
         const chatType = msg.chat.type;
@@ -272,35 +297,52 @@ const pollUpdates = async () => {
                              String(fromId) === String(allowedUserId);
 
         if (!isAuthorized) {
-          const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
-          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Type: ${chatType}, User: ${intruder}`);
+          // R3: Normalisation stricte contre les injections visuelles (newlines, caractères Bidi, contrôle)
+          const sanitizeVisual = (str, maxLen = 60) => {
+            return String(str || '')
+              .replace(/[\r\n\t]/g, ' ')
+              .replace(/[\u0000-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+              .substring(0, maxLen)
+              .trim();
+          };
 
-          // Anti-DoS : Si cet intrus a déjà été notifié dans les 60s, DROP SILENCIEUX (zéro requête réseau, préserve les quotas Telegram)
+          const safeFirstName = sanitizeVisual(msg.from?.first_name || 'Inconnu', 40);
+          const safeUsername = sanitizeVisual(msg.from?.username || 'sans_pseudo', 40);
+          const safeIntruder = `"${safeFirstName}" (@${safeUsername})`;
+          const safeText = `"${sanitizeVisual(msg.text, 80)}"`;
+
+          console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Type: ${chatType}, User: ${safeIntruder}`);
+
+          // Anti-DoS : Si cet intrus a déjà été notifié dans les 60s, DROP SILENCIEUX (zéro requête réseau)
           if (intruderCooldowns.get(chatId)) {
             continue;
           }
           intruderCooldowns.set(chatId, Date.now());
 
-          // Répondre une seule fois à l'intrus en supprimant tout clavier
-          try {
-            await telegramRequest('sendMessage', {
-              chat_id: chatId,
-              text: `⛔ Accès strictement refusé. Cet assistant personnel est verrouillé.`,
-              reply_markup: { remove_keyboard: true }
-            });
-          } catch (_) {}
+          // R5: Vérification du quota global sortant avant envoi du refus
+          if (canSendOutboundRefusal()) {
+            try {
+              await telegramRequest('sendMessage', {
+                chat_id: chatId,
+                text: `⛔ Accès strictement refusé. Cet assistant personnel est verrouillé.`,
+                reply_markup: { remove_keyboard: true }
+              });
+            } catch (err) {
+              console.warn('[Bot] Échec envoi message refus intrus :', err.message); // R9
+            }
+          }
 
-          // Alerte propriétaire en TEXTE BRUT pur (zéro parse_mode => élimination mathématique des failles de formatage)
+          // Alerte propriétaire en TEXTE BRUT pur avec valeurs encadrées
           if (!intruderAlertCooldowns.get(chatId)) {
             intruderAlertCooldowns.set(chatId, Date.now());
             try {
-              const safeCleanText = String(msg.text || '').substring(0, 100).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
-              const safeIntruder = String(intruder).replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
               await telegramRequest('sendMessage', {
                 chat_id: allowedChatId,
-                text: `[ALERTE SECURITE] Tentative d'accès bloquée !\n\n- Type chat : ${chatType}\n- Utilisateur : ${safeIntruder}\n- ID Telegram : ${chatId}\n- Message : ${safeCleanText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
+                text: `[ALERTE SECURITE] Tentative bloquée !\n• Type chat : "${chatType}"\n• Utilisateur : ${safeIntruder}\n• ID Telegram : ${chatId}\n• Message : ${safeText}\n\nL'accès aux données TgMaster a été bloqué à 100%.`
               });
-            } catch (_) {}
+            } catch (err) {
+              console.warn('[Bot] Échec envoi alerte propriétaire :', err.message); // R9
+            }
           }
 
           continue;
