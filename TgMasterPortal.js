@@ -214,16 +214,16 @@ class TgMasterPortal {
       if (sc.includes('new FullCalendar.Calendar') && sc.includes('events:')) {
         const evMatch = sc.match(/events\s*:\s*(\[[\s\S]*?\])\s*,\s*[a-zA-Z]/m) ||
                         sc.match(/events\s*:\s*(\[[\s\S]*?\])\s*\}\s*\)/m);
-        if (evMatch) {
+        if (evMatch && evMatch[1]) {
           try {
-            events = JSON.parse(evMatch[1]);
-            break;
-          } catch (e) {
-            // Fallback parsing au cas où format non strict
-            try {
-              events = (new Function(`return ${evMatch[1]}`))();
+            const parsed = JSON.parse(evMatch[1]);
+            if (Array.isArray(parsed)) {
+              // Validation de schéma stricte : filtrer uniquement les objets valides
+              events = parsed.filter(item => item && typeof item === 'object' && typeof item.title === 'string');
               break;
-            } catch {}
+            }
+          } catch (e) {
+            // Rejet silencieux si JSON malformé (zéro eval / zéro Function)
           }
         }
       }
