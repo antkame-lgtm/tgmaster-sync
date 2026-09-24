@@ -297,5 +297,12 @@ const pollUpdates = async () => {
   setTimeout(pollUpdates, 1000);
 };
 
-console.log('🤖 Démarrage du Bot Telegram 100% Direct (Audit strict validé)...');
-pollUpdates();
+// Démarrage sécurisé : suppression explicite de tout webhook pour garantir le Long Polling pur
+(async () => {
+  try {
+    await telegramRequest('deleteWebhook', { drop_pending_updates: false });
+    console.log('🔒 Webhook purgé : Mode Long Polling exclusif actif (zéro endpoint HTTP exposé).');
+  } catch (e) {}
+  console.log('🤖 Démarrage du Bot Telegram 100% Direct (Audit strict validé)...');
+  pollUpdates();
+})();
