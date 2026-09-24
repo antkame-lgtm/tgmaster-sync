@@ -219,10 +219,11 @@ const pollUpdates = async () => {
         if (!msg || !msg.text) continue;
 
         const chatId = msg.chat.id;
+        const fromId = msg.from ? msg.from.id : null;
         const text = msg.text.trim().toLowerCase();
 
-        // 🛡️ SÉCURITÉ STRICTE : WHITELISTING DU PROPRIÉTAIRE UNIQUE (CHAT ID) - FAIL-CLOSED
-        if (!allowedChatId || String(chatId) !== String(allowedChatId)) {
+        // 🛡️ SÉCURITÉ MAXIMALE : DOUBLE WHITELIST (CHAT ID + FROM USER ID) - FAIL-CLOSED
+        if (!allowedChatId || String(chatId) !== String(allowedChatId) || String(fromId) !== String(allowedChatId)) {
           const intruder = msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''} (@${msg.from.username || 'sans_pseudo'})`.trim() : 'Inconnu';
           console.warn(`[SÉCURITÉ] 🛑 Accès non autorisé bloqué ! Chat ID: ${chatId}, Utilisateur: ${intruder}, Texte: "${msg.text}"`);
           
