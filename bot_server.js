@@ -30,6 +30,37 @@ if (!botToken || !email || !password || !allowedChatId) {
 // Client direct vers le serveur officiel
 const portal = new TgMasterPortal(email, password);
 
+// Serveur Web Keep-Alive (indispensable pour que Render Web Service reste actif en statut 'Live')
+const http = require('http');
+const PORT = process.env.PORT || 8000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>TgMaster Assistant — Cloud 24/7</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 40px; text-align: center; }
+    .card { max-width: 550px; margin: 40px auto; background: #151d30; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 32px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    h1 { color: #38bdf8; font-size: 22px; margin-bottom: 12px; }
+    .status { display: inline-block; background: #065f46; color: #34d399; padding: 6px 16px; border-radius: 9999px; font-weight: 600; font-size: 13px; margin: 16px 0; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🤖 TgMaster University Assistant</h1>
+    <div class="status">🟢 Service Cloud Actif & Opérationnel 24h/24</div>
+    <p>Ce bot personnel est hébergé 100% dans le Cloud (Render), indépendant de votre ordinateur.</p>
+  </div>
+</body>
+</html>`);
+}).listen(PORT, () => {
+  console.log(`🌐 Serveur Keep-Alive Render actif sur le port ${PORT}`);
+});
+
 const telegramRequest = (method, data = null) => {
   return new Promise((resolve, reject) => {
     const postData = data ? JSON.stringify(data) : '';
